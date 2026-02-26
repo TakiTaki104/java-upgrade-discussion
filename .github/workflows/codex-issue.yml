@@ -1,0 +1,57 @@
+name: Codex from Issue
+
+on:
+  issues:
+    types: [opened, edited, labeled]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  codex:
+    if: ${{ github.event.issue.user.login == github.repository_owner && contains(github.event.issue.labels.*.name, 'request codex') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build prompt
+        id: build_prompt
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const isComment = !!context.payload.comment;
+            const comment = context.payload.comment;
+            let prompt = `Repo: ${context.repo.owner}/${context.repo.repo}\n` +
+              `Issue: #${issue.number}\n\n` +
+              `Title:\n${issue.title || ''}\n\n` +
+              `Body:\n${issue.body || ''}\n\n`;
+            if (isComment) {
+              prompt += `New comment by @${comment.user.login}:\n${comment.body || ''}\n`;
+            }
+            core.setOutput('prompt', prompt);
+
+      - name: Run Codex
+        id: run_codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt: ${{ steps.build_prompt.outputs.prompt }}
+
+      - name: Comment result
+        if: ${{ steps.run_codex.outputs.final-message != '' }}
+        uses: actions/github-script@v7
+        env:
+          CODEX_FINAL_MESSAGE: ${{ steps.run_codex.outputs.final-message }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `Codex result:\n\n${process.env.CODEX_FINAL_MESSAGE}`,
+            });
